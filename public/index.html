@@ -59,7 +59,13 @@
         <label>步进 (MHz)<input id="step" type="number" step="0.000001" value="0.025" required /></label>
         <label>最大偏移 (MHz)<input id="max-offset" type="number" step="0.000001" value="5" required /></label>
         <button type="submit" class="btn btn-primary" id="btn-coordinate">开始协调</button>
+        <div class="occupied-field">
+          <label for="occupied-bands">现场占用频段（可选，每行一个区间，MHz）</label>
+          <textarea id="occupied-bands" rows="3"
+            placeholder="如：&#10;520.000 - 522.000&#10;550.000 ~ 551.500&#10;留空则不避让任何占用频段"></textarea>
+        </div>
       </form>
+      <p class="hint">占用区间仅作为本次协调参数提交，不改动设备数据。候选频道的保护区（新载频 ± 保护间隔）与任一占用区间相交（端点相接也算）时即排除；重叠区间会自动合并。</p>
       <div id="coord-result"></div>
     </section>
 

@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mhzToHz, hzToMhz, computeConflicts, coordinate } = require('../lib/intermod');
+const { mhzToHz, hzToMhz, computeConflicts, coordinate, mergeIntervals } = require('../lib/intermod');
 
 /** 构造频道对象 */
 function ch(id, freqMhz, guardMhz = 0.25, locked = false) {
@@ -162,4 +162,103 @@ test('8 频道综合场景：协调后无冲突且总偏移最小', () => {
   }));
   assert.equal(computeConflicts(solved).length, 0);
   assert.equal(solved[6].freqHz, mhzToHz(574.0)); // 锁定频道不动
+});
+
+test('占用区间合并：重叠与端点相接的区间合并', () => {
+  assert.deepEqual(
+    mergeIntervals([
+      { lo: 520, hi: 522 },
+      { lo: 525, hi: 526 },
+      { lo: 521.5, hi: 524 },   // 与第一个重叠
+      { lo: 524, hi: 525 },     // 端点相接（524）也要合并
+    ]).map((iv) => ({ lo: iv.lo, hi: iv.hi })),
+    [{ lo: 520, hi: 526 }],
+  );
+  // 不相接则保留两个区间
+  assert.deepEqual(
+    mergeIntervals([{ lo: 520, hi: 521 }, { lo: 522, hi: 523 }]),
+    [{ lo: 520, hi: 521 }, { lo: 522, hi: 523 }],
+  );
+});
+
+test('现场占用避让：保护区落入占用区间的候选被排除', () => {
+  // 无冲突的双频道，正常协调总偏移为 0；占用区间恰好覆盖 CH2 原保护区（510 ± 0.25）
+  // → 候选保护区须整体离开 [509.75, 510.25]：f ≥ 510.525 或 f ≤ 509.475（偏移均为 0.525）
+  // 同分时按录入顺序取更低频率 → 509.475
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 510, 0.25, false)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(520),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(5),
+      occupiedHz: [{ lo: mhzToHz(509.75), hi: mhzToHz(510.25) }],
+    },
+  );
+  assert.equal(result.solved, true);
+  const newF2 = result.assignments[1].freqHz;
+  assert.equal(newF2, mhzToHz(509.475));
+  assert.equal(Math.abs(newF2 - mhzToHz(510)), mhzToHz(0.525));
+  // 结果回传已合并的占用区间
+  assert.deepEqual(result.occupiedHz, [{ lo: mhzToHz(509.75), hi: mhzToHz(510.25) }]);
+  // 新方案自身无互调冲突
+  const solved = result.assignments.map((a, i) => ({
+    id: a.id, name: a.name, freqHz: a.freqHz, guardHz: mhzToHz(0.25), locked: i === 0,
+  }));
+  assert.equal(computeConflicts(solved).length, 0);
+});
+
+test('现场占用避让：端点相接也算相交', () => {
+  // 占用区间上限 509.75 恰为原载频保护区下界（510-0.25）→ 候选 510 排除；
+  // k=-1 → 509.975 保护区 [509.725, 510.225] 仍相交，排除；
+  // k=+1 → 510.025 保护区 [509.775, 510.275] 已脱离 → 仅需偏移 0.025
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 510, 0.25, false)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(520),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(5),
+      occupiedHz: [{ lo: mhzToHz(505), hi: mhzToHz(509.75) }],
+    },
+  );
+  assert.equal(result.solved, true);
+  assert.equal(result.assignments[1].freqHz, mhzToHz(510.025));
+});
+
+test('现场占用避让：锁定频道保护区落入占用区间时无解且保持原值', () => {
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 510, 0.25, true)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(520),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(5),
+      occupiedHz: [{ lo: mhzToHz(499), hi: mhzToHz(501) }], // 覆盖锁定的 CH1
+    },
+  );
+  assert.equal(result.solved, false);
+  assert.equal(result.assignments[0].freqHz, mhzToHz(500));
+  assert.equal(result.assignments[1].freqHz, mhzToHz(510));
+  assert.match(result.reason, /占用/);
+  assert.equal(result.occupiedHz.length, 1);
+});
+
+test('现场占用避让：占用区间封死全部候选时无解、保持原值并说明', () => {
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 500.1, 0.25, false)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+      // 整个协调频段都被占用
+      occupiedHz: [{ lo: mhzToHz(489), hi: mhzToHz(511) }],
+    },
+  );
+  assert.equal(result.solved, false);
+  assert.match(result.reason, /占用/);
+  assert.equal(result.assignments[1].freqHz, mhzToHz(500.1)); // 保持原频率
+});
+
+test('现场占用避让：无占用区间时 occupiedHz 为空且结果与原规则一致', () => {
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 510, 0.25, false)],
+    { bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(520), stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2) },
+  );
+  assert.equal(result.solved, true);
+  assert.equal(result.totalOffsetHz, 0);
+  assert.deepEqual(result.occupiedHz, []);
 });

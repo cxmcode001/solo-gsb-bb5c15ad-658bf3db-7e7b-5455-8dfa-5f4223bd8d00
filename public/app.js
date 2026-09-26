@@ -178,8 +178,57 @@ function esc(s) {
 
 /* ---------- 自动协调 ---------- */
 
+/**
+ * 解析现场占用频段文本：每行一个区间，形如 "520 - 522"（也支持 ~、—、逗号、空格分隔）。
+ * 校验有限数值、下限不大于上限。返回 { occupied } 或 { error }。
+ */
+function parseOccupiedInput(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const intervals = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const parts = line.split(/\s*(?:~|—|–|-|,|，|至|\s)\s*/).filter((s) => s.length > 0);
+    if (parts.length !== 2) {
+      return { error: `占用区间「${line}」格式无效：每行须填写“下限 上限”两个数值（MHz）` };
+    }
+    const lo = Number(parts[0]);
+    const hi = Number(parts[1]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      return { error: `占用区间「${line}」必须是有限数值（MHz）` };
+    }
+    if (lo > hi) {
+      return { error: `占用区间「${line}」下限不能大于上限` };
+    }
+    intervals.push({ lo, hi });
+  }
+  return { occupied: intervals };
+}
+
+/** 合并重叠 / 端点相接区间，返回新数组（按频率升序） */
+function mergeIntervalsClient(intervals) {
+  const sorted = intervals.map((iv) => ({ ...iv })).sort((a, b) => a.lo - b.lo || a.hi - b.hi);
+  const merged = [];
+  for (const iv of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && iv.lo <= last.hi) {
+      if (iv.hi > last.hi) last.hi = iv.hi;
+    } else {
+      merged.push(iv);
+    }
+  }
+  return merged;
+}
+
+function formatIntervals(list) {
+  if (!list || list.length === 0) return '无';
+  return list.map((iv) => `${fmt(iv.lo)}–${fmt(iv.hi)} MHz`).join('、');
+}
+
 $('#coord-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const parsed = parseOccupiedInput($('#occupied-bands').value);
+  if (parsed.error) { toast(parsed.error, true); return; }
   const btn = $('#btn-coordinate');
   btn.disabled = true;
   btn.textContent = '协调中…';
@@ -191,6 +240,7 @@ $('#coord-form').addEventListener('submit', async (e) => {
         bandMax: Number($('#band-max').value),
         step: Number($('#step').value),
         maxOffset: Number($('#max-offset').value),
+        occupied: parsed.occupied,
       }),
     });
     lastCoordResult = result;
@@ -222,11 +272,16 @@ function renderCoordResult(r) {
       <tbody>${rows}</tbody>
     </table></div>`;
 
+  const avoidedLine = r.occupied && r.occupied.length > 0
+    ? `<p class="occupied-line" style="margin:0 0 4px">📡 本次避让占用频段：<span class="freq">${esc(formatIntervals(mergeIntervalsClient(r.occupied)))}</span></p>`
+    : '';
+
   if (r.solved) {
     box.innerHTML = `
       <div class="result-box success">
         <p class="ok-text" style="margin:0 0 4px">✓ 协调成功：找到无冲突方案，总偏移 ${fmt(r.totalOffset)} MHz
           ${r.capped ? '<span class="warn-text">（搜索已截断，可能非全局最优）</span>' : ''}</p>
+        ${avoidedLine}
         ${r.reason ? `<p class="warn-text" style="margin:0 0 4px">${esc(r.reason)}</p>` : ''}
         ${table}
         <div class="save-plan-row">
@@ -241,6 +296,9 @@ function renderCoordResult(r) {
     box.innerHTML = `
       <div class="result-box failure">
         <p class="warn-text" style="margin:0 0 4px">✗ 未找到无冲突方案，已保持原有频率</p>
+        ${r.occupied && r.occupied.length > 0
+          ? `<p class="occupied-line" style="margin:0 0 4px">📡 现场占用频段限制：<span class="freq">${esc(formatIntervals(mergeIntervalsClient(r.occupied)))}</span></p>`
+          : ''}
         <p class="muted" style="margin:0 0 8px">${esc(r.reason || '')}</p>
         ${table}
       </div>`;
@@ -308,6 +366,9 @@ async function loadPlans() {
         <td class="freq">${fmt(a.frequency)}</td>
         <td class="freq">${a.offset > 0 ? fmt(a.offset) : '0'}</td>
       </tr>`).join('');
+    const occupiedLine = Array.isArray(p.params.occupied) && p.params.occupied.length > 0
+      ? `<br>避让占用频段：<span class="freq">${esc(formatIntervals(mergeIntervalsClient(p.params.occupied)))}</span>`
+      : '';
     div.innerHTML = `
       <details>
         <summary><strong>${esc(p.name)}</strong>
@@ -317,6 +378,7 @@ async function loadPlans() {
           保存时间：${esc(p.createdAt)} ｜ 频段 ${fmt(p.params.bandMin)}–${fmt(p.params.bandMax)} MHz ｜
           步进 ${fmt(p.params.step)} MHz ｜ 最大偏移 ${fmt(p.params.maxOffset)} MHz ｜
           总偏移 <span class="freq">${fmt(p.totalOffset)}</span> MHz
+          ${occupiedLine}
         </p>
         <div class="table-wrap"><table>
           <thead><tr><th>频道</th><th>原频率 (MHz)</th><th>方案频率 (MHz)</th><th>偏移 (MHz)</th></tr></thead>

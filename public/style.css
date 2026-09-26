@@ -78,7 +78,8 @@ th { color: var(--muted); font-weight: 600; font-size: 0.82rem; text-transform: 
 tbody tr:hover { background: rgba(77, 163, 255, 0.05); }
 
 td input[type="text"], td input[type="number"],
-.add-form input, .coord-form input, .save-plan-row input {
+.add-form input, .coord-form input, .save-plan-row input,
+.coord-form textarea {
   background: #121a2b;
   border: 1px solid var(--card-border);
   color: var(--text);
@@ -87,6 +88,7 @@ td input[type="text"], td input[type="number"],
   font-size: 0.9rem;
   width: 100%;
 }
+.coord-form textarea { font-family: var(--mono); resize: vertical; min-height: 64px; }
 td input[type="number"] { font-family: var(--mono); }
 input:focus { outline: 2px solid var(--accent-dark); border-color: var(--accent); }
 
@@ -129,6 +131,10 @@ input:focus { outline: 2px solid var(--accent-dark); border-color: var(--accent)
   align-items: end;
 }
 .coord-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.84rem; color: var(--muted); }
+.occupied-field { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+.occupied-field label { font-size: 0.84rem; color: var(--muted); }
+.occupied-line { color: var(--accent); font-size: 0.88rem; }
+.occupied-line.failure { color: var(--warn); }
 
 .ok-text { color: var(--ok); }
 .danger-text { color: var(--danger); }

@@ -3,7 +3,7 @@
 const path = require('path');
 const express = require('express');
 const db = require('./db');
-const { mhzToHz, hzToMhz, computeConflicts, coordinate } = require('./lib/intermod');
+const { mhzToHz, hzToMhz, computeConflicts, coordinate, mergeIntervals } = require('./lib/intermod');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -82,6 +82,39 @@ function validateDeviceInput(body) {
   return null;
 }
 
+const MAX_OCCUPIED_INTERVALS = 20;
+
+/**
+ * 校验现场占用频段输入。
+ * 接受数组，每项为 {lo, hi}（MHz）；须为有限数值且 lo <= hi。
+ * 返回 { error } 或 { occupied: 合并后的 MHz 区间数组 }。
+ */
+function parseOccupiedIntervals(raw) {
+  if (raw === undefined || raw === null) return { occupied: [] };
+  if (!Array.isArray(raw)) return { error: '占用频段必须是区间数组' };
+  if (raw.length > MAX_OCCUPIED_INTERVALS) {
+    return { error: `占用区间最多填写 ${MAX_OCCUPIED_INTERVALS} 个` };
+  }
+  const intervals = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item = raw[i];
+    if (!item || typeof item !== 'object') {
+      return { error: `第 ${i + 1} 个占用区间格式无效` };
+    }
+    const lo = Number(item.lo);
+    const hi = Number(item.hi);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      return { error: `第 ${i + 1} 个占用区间必须是有限数值（MHz）` };
+    }
+    if (lo > hi) {
+      return { error: `第 ${i + 1} 个占用区间下限不能大于上限` };
+    }
+    intervals.push({ lo, hi });
+  }
+  // 合并重叠 / 端点相接的区间
+  return { occupied: mergeIntervals(intervals) };
+}
+
 // ---------- 设备管理 ----------
 
 app.get('/api/devices', (req, res) => {
@@ -145,6 +178,10 @@ app.post('/api/coordinate', (req, res) => {
   if (!Number.isFinite(step) || step <= 0) return badRequest(res, '步进必须为正数（MHz）');
   if (!Number.isFinite(maxOffset) || maxOffset < 0) return badRequest(res, '最大偏移必须为非负数（MHz）');
 
+  const occupiedParsed = parseOccupiedIntervals(body.occupied);
+  if (occupiedParsed.error) return badRequest(res, occupiedParsed.error);
+  const occupied = occupiedParsed.occupied;
+
   const devices = listDevices();
   if (devices.length === 0) return badRequest(res, '尚未录入任何设备');
 
@@ -153,6 +190,7 @@ app.post('/api/coordinate', (req, res) => {
     bandMaxHz: mhzToHz(bandMax),
     stepHz: mhzToHz(step),
     maxOffsetHz: mhzToHz(maxOffset),
+    occupiedHz: occupied.map((iv) => ({ lo: mhzToHz(iv.lo), hi: mhzToHz(iv.hi) })),
   });
 
   // 方案对应的冲突复核（成功时应为 0）
@@ -172,7 +210,9 @@ app.post('/api/coordinate', (req, res) => {
     totalOffset: hzToMhz(result.totalOffsetHz),
     assignments: result.assignments.map(assignmentToJson),
     conflicts: resultConflicts,
-    params: { bandMin, bandMax, step, maxOffset },
+    // 实际参与避让的占用区间（已合并重叠/相接区间，按频率升序）
+    occupied: result.occupiedHz.map((iv) => ({ lo: hzToMhz(iv.lo), hi: hzToMhz(iv.hi) })),
+    params: { bandMin, bandMax, step, maxOffset, occupied },
   });
 });
 
