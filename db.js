@@ -24,7 +24,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS plans (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT NOT NULL,
-    params         TEXT NOT NULL,         -- JSON：协调参数（频段/步进/最大偏移）
+    params         TEXT NOT NULL,         -- JSON：协调参数（频段/步进/最大偏移/现场占用区间）
     assignments    TEXT NOT NULL,         -- JSON：各频道分配结果
     total_offset   REAL NOT NULL DEFAULT 0, -- 总偏移 MHz
     solved         INTEGER NOT NULL DEFAULT 1,

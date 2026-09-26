@@ -130,6 +130,41 @@ input:focus { outline: 2px solid var(--accent-dark); border-color: var(--accent)
 }
 .coord-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.84rem; color: var(--muted); }
 
+.occupied-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--card-border);
+  border-radius: 8px;
+  background: rgba(255, 184, 77, 0.04);
+}
+.occupied-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+.occupied-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.occupied-row input {
+  background: #121a2b;
+  border: 1px solid var(--card-border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 0.9rem;
+  font-family: var(--mono);
+  width: 150px;
+  max-width: 100%;
+}
+.occupied-row input:focus { outline: 2px solid var(--accent-dark); border-color: var(--accent); }
+
 .ok-text { color: var(--ok); }
 .danger-text { color: var(--danger); }
 .warn-text { color: var(--warn); }
@@ -198,4 +233,6 @@ input:focus { outline: 2px solid var(--accent-dark); border-color: var(--accent)
 @media (max-width: 860px) {
   .coord-form { grid-template-columns: repeat(2, 1fr); }
   .add-form { grid-template-columns: 1fr 1fr; }
+  .occupied-row { flex-wrap: wrap; }
+  .occupied-row input { width: 130px; }
 }

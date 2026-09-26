@@ -3,7 +3,7 @@
 const path = require('path');
 const express = require('express');
 const db = require('./db');
-const { mhzToHz, hzToMhz, computeConflicts, coordinate } = require('./lib/intermod');
+const { mhzToHz, hzToMhz, computeConflicts, coordinate, normalizeOccupiedBands } = require('./lib/intermod');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -145,6 +145,16 @@ app.post('/api/coordinate', (req, res) => {
   if (!Number.isFinite(step) || step <= 0) return badRequest(res, '步进必须为正数（MHz）');
   if (!Number.isFinite(maxOffset) || maxOffset < 0) return badRequest(res, '最大偏移必须为非负数（MHz）');
 
+  // 现场占用频段（本次协调参数，不写入设备数据）：校验有限数值、下限 ≤ 上限并合并重叠区间
+  let occupiedBands = [];
+  if (body.occupiedBands !== undefined && body.occupiedBands !== null) {
+    try {
+      occupiedBands = normalizeOccupiedBands(body.occupiedBands);
+    } catch (e) {
+      return badRequest(res, e.message);
+    }
+  }
+
   const devices = listDevices();
   if (devices.length === 0) return badRequest(res, '尚未录入任何设备');
 
@@ -153,6 +163,7 @@ app.post('/api/coordinate', (req, res) => {
     bandMaxHz: mhzToHz(bandMax),
     stepHz: mhzToHz(step),
     maxOffsetHz: mhzToHz(maxOffset),
+    occupiedHz: occupiedBands.map((b) => ({ loHz: mhzToHz(b.lo), hiHz: mhzToHz(b.hi) })),
   });
 
   // 方案对应的冲突复核（成功时应为 0）
@@ -172,7 +183,7 @@ app.post('/api/coordinate', (req, res) => {
     totalOffset: hzToMhz(result.totalOffsetHz),
     assignments: result.assignments.map(assignmentToJson),
     conflicts: resultConflicts,
-    params: { bandMin, bandMax, step, maxOffset },
+    params: { bandMin, bandMax, step, maxOffset, occupiedBands },
   });
 });
 

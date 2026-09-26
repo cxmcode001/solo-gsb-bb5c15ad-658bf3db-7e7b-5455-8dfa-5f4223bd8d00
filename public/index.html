@@ -60,6 +60,14 @@
         <label>最大偏移 (MHz)<input id="max-offset" type="number" step="0.000001" value="5" required /></label>
         <button type="submit" class="btn btn-primary" id="btn-coordinate">开始协调</button>
       </form>
+      <div class="occupied-box">
+        <div class="occupied-head">
+          <span>现场占用频段避让（可选，仅用于本次协调，不改动设备数据）</span>
+          <button type="button" class="btn btn-sm btn-ghost" id="btn-add-occupied">+ 添加占用区间</button>
+        </div>
+        <p class="hint">临时填写现场扫描到的占用区间（MHz）。候选频道新载频的保护区与任一占用区间相交（端点相接也算）即视为不可用；重叠区间会自动合并。</p>
+        <div id="occupied-rows"></div>
+      </div>
       <div id="coord-result"></div>
     </section>
 

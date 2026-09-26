@@ -178,8 +178,61 @@ function esc(s) {
 
 /* ---------- 自动协调 ---------- */
 
+/* 现场占用频段（临时参数，仅随协调请求提交，不改动设备数据） */
+function addOccupiedRow(lo = '', hi = '') {
+  const wrap = $('#occupied-rows');
+  const row = document.createElement('div');
+  row.className = 'occupied-row';
+  row.innerHTML = `
+    <span class="muted">占用</span>
+    <input type="number" class="occ-lo" step="0.000001" placeholder="下限 MHz" />
+    <span class="muted">–</span>
+    <input type="number" class="occ-hi" step="0.000001" placeholder="上限 MHz" />
+    <button type="button" class="btn btn-sm btn-danger" data-act="del-occ">移除</button>`;
+  row.querySelector('.occ-lo').value = lo;
+  row.querySelector('.occ-hi').value = hi;
+  row.querySelector('[data-act="del-occ"]').addEventListener('click', () => row.remove());
+  wrap.appendChild(row);
+}
+
+$('#btn-add-occupied').addEventListener('click', () => addOccupiedRow());
+
+/** 读取占用区间：整行留空则忽略；仅填一端或下限大于上限时报错 */
+function readOccupiedBands() {
+  const bands = [];
+  for (const row of $('#occupied-rows').querySelectorAll('.occupied-row')) {
+    const loRaw = row.querySelector('.occ-lo').value.trim();
+    const hiRaw = row.querySelector('.occ-hi').value.trim();
+    if (loRaw === '' && hiRaw === '') continue;
+    if (loRaw === '' || hiRaw === '') {
+      throw new Error('占用区间需同时填写下限与上限（MHz），或整行留空');
+    }
+    const lo = Number(loRaw);
+    const hi = Number(hiRaw);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      throw new Error('占用频段必须是有效数值（MHz）');
+    }
+    if (lo > hi) throw new Error(`占用区间无效：下限 ${lo} 不能大于上限 ${hi}`);
+    bands.push({ lo, hi });
+  }
+  return bands;
+}
+
+/** 实际参与避让（已合并）的占用区间摘要文本 */
+function occupiedSummary(bands) {
+  if (!bands || bands.length === 0) return '';
+  return bands.map((b) => `${fmt(b.lo)}–${fmt(b.hi)} MHz`).join('、');
+}
+
 $('#coord-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  let occupiedBands;
+  try {
+    occupiedBands = readOccupiedBands();
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
   const btn = $('#btn-coordinate');
   btn.disabled = true;
   btn.textContent = '协调中…';
@@ -191,6 +244,7 @@ $('#coord-form').addEventListener('submit', async (e) => {
         bandMax: Number($('#band-max').value),
         step: Number($('#step').value),
         maxOffset: Number($('#max-offset').value),
+        occupiedBands,
       }),
     });
     lastCoordResult = result;
@@ -222,12 +276,18 @@ function renderCoordResult(r) {
       <tbody>${rows}</tbody>
     </table></div>`;
 
+  const occText = occupiedSummary(r.params && r.params.occupiedBands);
+  const occLine = occText
+    ? `<p class="muted" style="margin:0 0 6px">🚧 现场占用频段（已避让）：${esc(occText)}</p>`
+    : '';
+
   if (r.solved) {
     box.innerHTML = `
       <div class="result-box success">
         <p class="ok-text" style="margin:0 0 4px">✓ 协调成功：找到无冲突方案，总偏移 ${fmt(r.totalOffset)} MHz
           ${r.capped ? '<span class="warn-text">（搜索已截断，可能非全局最优）</span>' : ''}</p>
         ${r.reason ? `<p class="warn-text" style="margin:0 0 4px">${esc(r.reason)}</p>` : ''}
+        ${occLine}
         ${table}
         <div class="save-plan-row">
           <button class="btn btn-primary" id="btn-apply-result">应用到设备</button>
@@ -242,6 +302,7 @@ function renderCoordResult(r) {
       <div class="result-box failure">
         <p class="warn-text" style="margin:0 0 4px">✗ 未找到无冲突方案，已保持原有频率</p>
         <p class="muted" style="margin:0 0 8px">${esc(r.reason || '')}</p>
+        ${occLine}
         ${table}
       </div>`;
   }
@@ -318,6 +379,7 @@ async function loadPlans() {
           步进 ${fmt(p.params.step)} MHz ｜ 最大偏移 ${fmt(p.params.maxOffset)} MHz ｜
           总偏移 <span class="freq">${fmt(p.totalOffset)}</span> MHz
         </p>
+        <p class="plan-meta">现场占用频段：${occupiedSummary(p.params.occupiedBands) ? '🚧 ' + esc(occupiedSummary(p.params.occupiedBands)) : '无'}</p>
         <div class="table-wrap"><table>
           <thead><tr><th>频道</th><th>原频率 (MHz)</th><th>方案频率 (MHz)</th><th>偏移 (MHz)</th></tr></thead>
           <tbody>${rows}</tbody>
@@ -351,6 +413,7 @@ $('#btn-refresh-plans').addEventListener('click', () => loadPlans().catch((e) =>
 /* ---------- 启动 ---------- */
 
 (async () => {
+  addOccupiedRow(); // 默认提供一行（留空即不启用避让）
   try {
     await loadDevices();
     await loadPlans();

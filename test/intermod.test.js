@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mhzToHz, hzToMhz, computeConflicts, coordinate } = require('../lib/intermod');
+const { mhzToHz, hzToMhz, computeConflicts, coordinate, normalizeOccupiedBands } = require('../lib/intermod');
 
 /** 构造频道对象 */
 function ch(id, freqMhz, guardMhz = 0.25, locked = false) {
@@ -162,4 +162,138 @@ test('8 频道综合场景：协调后无冲突且总偏移最小', () => {
   }));
   assert.equal(computeConflicts(solved).length, 0);
   assert.equal(solved[6].freqHz, mhzToHz(574.0)); // 锁定频道不动
+});
+
+/* ---------- 现场占用频段 ---------- */
+
+test('占用区间校验：非有限数值与下限大于上限均被拒绝', () => {
+  assert.throws(() => normalizeOccupiedBands([{ lo: 'abc', hi: 500 }]), /有限数值/);
+  assert.throws(() => normalizeOccupiedBands([{ lo: NaN, hi: 500 }]), /有限数值/);
+  assert.throws(() => normalizeOccupiedBands([{ lo: 501, hi: 500 }]), /下限/);
+  assert.throws(() => normalizeOccupiedBands('x'), /数组/);
+  assert.throws(() => normalizeOccupiedBands([{ lo: 500 }]), /有限数值/);
+  assert.throws(() => normalizeOccupiedBands([null]), /上限/);
+});
+
+test('占用区间：合并重叠与端点相接的区间并按下限排序', () => {
+  const merged = normalizeOccupiedBands([
+    { lo: 505, hi: 510 },
+    { lo: 499, hi: 501 },
+    { lo: 500.5, hi: 505 },     // 与 [499,501] 重叠，并与 [505,510] 在 505 相接
+    { lo: 520, hi: 521 },
+  ]);
+  assert.deepEqual(merged, [
+    { lo: 499, hi: 510 },
+    { lo: 520, hi: 521 },
+  ]);
+  // 单点区间合法（下限 = 上限）
+  assert.deepEqual(normalizeOccupiedBands([{ lo: 500, hi: 500 }]), [{ lo: 500, hi: 500 }]);
+  // 空输入 → 空数组（不启用避让）
+  assert.deepEqual(normalizeOccupiedBands([]), []);
+});
+
+test('占用避让：保护区与占用区间相交的候选被剔除，其余仍按总偏移最小求解', () => {
+  // 单频道无互调问题；占用 [499.8, 500.2]，guard 0.25
+  // 候选 f 的保护区 [f-0.25, f+0.25] 与占用区间相交即不可用
+  // 两侧最近的可用候选：499.525（保护区右端 499.775 < 499.8）、500.475（左端 500.225 > 500.2）
+  const params = {
+    bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+    stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+    occupiedHz: [{ loHz: mhzToHz(499.8), hiHz: mhzToHz(500.2) }],
+  };
+  const result = coordinate([ch(1, 500, 0.25)], params);
+  assert.equal(result.solved, true);
+  assert.equal(result.assignments[0].freqHz, mhzToHz(499.525)); // 偏移 0.475
+  // 对照：无占用时保持原频
+  const { occupiedHz, ...freeParams } = params;
+  const free = coordinate([ch(1, 500, 0.25)], freeParams);
+  assert.equal(free.assignments[0].freqHz, mhzToHz(500));
+});
+
+test('占用避让：端点相接也算相交（闭区间）', () => {
+  // 占用 [500.2, 510]：f = 499.95 时保护区右端 = 500.2，恰好相接 → 不可用
+  // 最近可用为 499.925（右端 500.175 < 500.2）
+  const result = coordinate(
+    [ch(1, 500, 0.25)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+      occupiedHz: [{ loHz: mhzToHz(500.2), hiHz: mhzToHz(510) }],
+    },
+  );
+  assert.equal(result.solved, true);
+  assert.equal(result.assignments[0].freqHz, mhzToHz(499.925));
+});
+
+test('占用避让：重叠区间合并后等价生效', () => {
+  const channels = [ch(1, 500, 0.25)];
+  const base = {
+    bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+    stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+  };
+  const split = coordinate(channels, {
+    ...base,
+    occupiedHz: [
+      { loHz: mhzToHz(499.9), hiHz: mhzToHz(500.05) },
+      { loHz: mhzToHz(500.05), hiHz: mhzToHz(500.3) }, // 端点相接，合并为 [499.9,500.3]
+    ],
+  });
+  const merged = coordinate(channels, {
+    ...base,
+    occupiedHz: [{ loHz: mhzToHz(499.9), hiHz: mhzToHz(500.3) }],
+  });
+  assert.equal(split.solved, true);
+  assert.equal(split.assignments[0].freqHz, merged.assignments[0].freqHz);
+});
+
+test('占用避让：所有候选均被占用频段堵死 → 无解、保持原值并说明占用原因', () => {
+  const result = coordinate(
+    [ch(1, 500, 0.25)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+      occupiedHz: [{ loHz: mhzToHz(0), hiHz: mhzToHz(100000) }],
+    },
+  );
+  assert.equal(result.solved, false);
+  assert.match(result.reason, /占用频段/);
+  assert.equal(result.assignments[0].freqHz, mhzToHz(500)); // 保持原值
+});
+
+test('占用避让：锁定频道保护区与占用区间相交 → 明确提示且保持原频', () => {
+  const result = coordinate(
+    [ch(1, 500, 0.25, true)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+      occupiedHz: [{ loHz: mhzToHz(500.1), hiHz: mhzToHz(500.4) }],
+    },
+  );
+  assert.equal(result.solved, false);
+  assert.match(result.reason, /锁定频道/);
+  assert.match(result.reason, /占用频段/);
+  assert.equal(result.assignments[0].freqHz, mhzToHz(500));
+});
+
+test('占用避让：互调规则与占用约束同时生效，结果既无互调冲突也不侵入占用区', () => {
+  // 500（锁定）+ 500.1（未锁定）存在互调冲突；占用区间再排除 500.275–500.5
+  const occupiedHz = [{ loHz: mhzToHz(500.275), hiHz: mhzToHz(500.5) }];
+  const result = coordinate(
+    [ch(1, 500, 0.25, true), ch(2, 500.1, 0.25, false)],
+    {
+      bandMinHz: mhzToHz(490), bandMaxHz: mhzToHz(510),
+      stepHz: mhzToHz(0.025), maxOffsetHz: mhzToHz(2),
+      occupiedHz,
+    },
+  );
+  assert.equal(result.solved, true);
+  const f2 = result.assignments[1].freqHz;
+  // 无互调冲突
+  const solved = [
+    { id: 1, name: 'a', freqHz: mhzToHz(500), guardHz: mhzToHz(0.25) },
+    { id: 2, name: 'b', freqHz: f2, guardHz: mhzToHz(0.25) },
+  ];
+  assert.equal(computeConflicts(solved).length, 0);
+  // 新载频保护区不侵入占用区间
+  assert.ok(f2 + mhzToHz(0.25) < mhzToHz(500.275) || f2 - mhzToHz(0.25) > mhzToHz(500.5));
 });
